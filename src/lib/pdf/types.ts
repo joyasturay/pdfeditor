@@ -25,6 +25,8 @@ export interface PdfTextBlock {
   width: number;
   height: number;
   fontSize: number;
+  /** Detected table column — used to keep label/value cells separate. */
+  columnIndex?: number;
 }
 
 export function blockTextBaseline(block: PdfTextBlock) {

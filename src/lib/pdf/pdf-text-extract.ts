@@ -10,6 +10,70 @@ function estimateTextWidth(text: string, fontSize: number) {
   return Math.max(text.length * fontSize * 0.52, fontSize * 0.4);
 }
 
+/** Split one wide pdf.js item that contains both label and value (common in form PDFs). */
+function splitFormFieldItem(
+  str: string,
+  x: number,
+  y: number,
+  fontSize: number,
+  reportedWidth: number,
+  pageIndex: number,
+  pageWidth: number,
+  pageHeight: number
+): Omit<PdfTextBlock, "id">[] {
+  const words = str.trim().split(/\s+/);
+  if (words.length < 2) return [];
+
+  const totalEstimated = estimateTextWidth(str, fontSize);
+  if (reportedWidth <= totalEstimated * 1.6) return [];
+
+  const valuePattern = /^[\d/\-:.,APMapm\s]+$/;
+  let splitAt = words.length;
+
+  for (let i = words.length - 1; i >= 0; i--) {
+    if (valuePattern.test(words[i])) splitAt = i;
+    else break;
+  }
+
+  if (splitAt <= 0 || splitAt >= words.length) return [];
+
+  const labelText = words.slice(0, splitAt).join(" ");
+  const valueText = words.slice(splitAt).join(" ");
+  const labelWidth = estimateTextWidth(labelText, fontSize);
+  const valueWidth = estimateTextWidth(valueText, fontSize);
+  const gap = Math.max(reportedWidth - labelWidth - valueWidth, fontSize * 0.5);
+  const valueX = x + labelWidth + gap;
+
+  return [
+    clampBlockBounds(
+      {
+        pageIndex,
+        text: labelText,
+        x,
+        y,
+        width: labelWidth,
+        height: fontSize * 1.15,
+        fontSize,
+      },
+      pageWidth,
+      pageHeight
+    ),
+    clampBlockBounds(
+      {
+        pageIndex,
+        text: valueText,
+        x: valueX,
+        y,
+        width: valueWidth,
+        height: fontSize * 1.15,
+        fontSize,
+      },
+      pageWidth,
+      pageHeight
+    ),
+  ];
+}
+
 function clampBlockBounds(
   block: Omit<PdfTextBlock, "id">,
   pageWidth: number,
@@ -56,6 +120,24 @@ export async function extractPageTextBlocks(
     const scaleX = Math.hypot(tx[0], tx[1]) || 1;
     const reportedWidth = Math.abs(item.width * scaleX);
     const estimated = estimateTextWidth(str, fontSize);
+
+    const splitParts = splitFormFieldItem(
+      str,
+      x,
+      y,
+      fontSize,
+      reportedWidth > 0 ? reportedWidth : estimated,
+      pageIndex,
+      pageWidth,
+      pageHeight
+    );
+
+    if (splitParts.length > 0) {
+      for (const part of splitParts) {
+        raw.push({ id: uuidv4(), ...part });
+      }
+      continue;
+    }
 
     // Cap width to 1.25× estimated — prevents oversized white covers on export
     const width = Math.min(

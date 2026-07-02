@@ -29,7 +29,6 @@ export function parseRegionBlockIds(regionId: string): string[] {
     const ids = regionId.slice(7);
     return ids ? ids.split("|") : [];
   }
-  // legacy
   return regionId.replace(/^region-/, "").split("_");
 }
 
@@ -80,13 +79,81 @@ export function sameLine(a: PdfTextBlock, b: PdfTextBlock) {
   return Math.abs(a.y - b.y) < Math.max(a.fontSize, b.fontSize) * 0.55;
 }
 
+function blockCenterX(block: PdfTextBlock) {
+  return block.x + block.width / 2;
+}
+
+function gapBetween(a: PdfTextBlock, b: PdfTextBlock) {
+  return b.x - (a.x + a.width);
+}
+
+function median(values: number[]) {
+  if (values.length === 0) return 12;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+/**
+ * Detect table columns by clustering text x-positions across the whole page.
+ * Labels ("Date of Birth") and values ("28-08-2005") land in different columns
+ * even when the horizontal gap between them is small.
+ */
+export function assignColumnIndices(blocks: PdfTextBlock[]): PdfTextBlock[] {
+  if (blocks.length === 0) return [];
+
+  const fontSize = median(blocks.map((b) => b.fontSize));
+  const clusterThreshold = fontSize * 1.8;
+
+  const sorted = [...blocks].sort((a, b) => blockCenterX(a) - blockCenterX(b));
+  const clusters: { centerX: number; blocks: PdfTextBlock[] }[] = [];
+
+  for (const block of sorted) {
+    const cx = blockCenterX(block);
+    let bestCluster: (typeof clusters)[number] | null = null;
+    let bestDist = Infinity;
+
+    for (const cluster of clusters) {
+      const dist = Math.abs(cx - cluster.centerX);
+      if (dist < clusterThreshold && dist < bestDist) {
+        bestDist = dist;
+        bestCluster = cluster;
+      }
+    }
+
+    if (bestCluster) {
+      bestCluster.blocks.push(block);
+      const count = bestCluster.blocks.length;
+      bestCluster.centerX =
+        (bestCluster.centerX * (count - 1) + cx) / count;
+    } else {
+      clusters.push({ centerX: cx, blocks: [block] });
+    }
+  }
+
+  clusters.sort((a, b) => a.centerX - b.centerX);
+
+  return blocks.map((block) => {
+    const cx = blockCenterX(block);
+    let columnIndex = 0;
+    let bestDist = Infinity;
+    clusters.forEach((cluster, idx) => {
+      const dist = Math.abs(cx - cluster.centerX);
+      if (dist < bestDist) {
+        bestDist = dist;
+        columnIndex = idx;
+      }
+    });
+    return { ...block, columnIndex };
+  });
+}
+
 export function getLineBlocks(
   blocks: PdfTextBlock[],
   pageIndex: number,
   seed: PdfTextBlock
 ): PdfTextBlock[] {
-  const pageBlocks = blocks.filter((b) => b.pageIndex === pageIndex);
-  return pageBlocks
+  return blocks
+    .filter((b) => b.pageIndex === pageIndex)
     .filter((b) => sameLine(b, seed))
     .sort((a, b) => a.x - b.x);
 }
@@ -113,58 +180,42 @@ export function hitTestBlock(
   return null;
 }
 
-function gapBetween(a: PdfTextBlock, b: PdfTextBlock) {
-  return b.x - (a.x + a.width);
-}
+/** Merge adjacent words within the same table cell (same line + column). */
+function mergeWordsInCell(blocks: PdfTextBlock[]): PdfTextBlock[] {
+  if (blocks.length <= 1) return blocks;
 
-/**
- * Split a text line into table cells / field groups using gap analysis.
- * Word gaps within a cell are small (~0.3–1.2× fontSize).
- * Table column gaps are much larger (~2×+ fontSize).
- */
-export function splitLineIntoCells(line: PdfTextBlock[]): PdfTextBlock[][] {
-  if (line.length <= 1) return [line];
-
-  const sorted = [...line].sort((a, b) => a.x - b.x);
-  const fontSize = Math.max(...sorted.map((b) => b.fontSize));
-  const gaps = sorted.slice(1).map((b, i) => gapBetween(sorted[i], b));
-
-  if (gaps.length === 0) return [sorted];
-
-  const minGap = Math.min(...gaps);
-  const maxGap = Math.max(...gaps);
-
-  // All items are close together — one cell (e.g. "JOYASTU RAY")
-  if (maxGap <= fontSize * 1.35) {
-    return [sorted];
-  }
-
-  // Adaptive threshold: split where gap exceeds typical word spacing
-  const sortedGaps = [...gaps].sort((a, b) => a - b);
-  const medianGap = sortedGaps[Math.floor(sortedGaps.length / 2)] ?? fontSize;
-  const columnThreshold = Math.max(
-    fontSize * 1.35,
-    minGap * 2.5,
-    medianGap * 0.85
-  );
-
-  const cells: PdfTextBlock[][] = [];
-  let cell: PdfTextBlock[] = [sorted[0]];
+  const sorted = [...blocks].sort((a, b) => a.x - b.x);
+  const merged: PdfTextBlock[] = [];
+  let group: PdfTextBlock[] = [sorted[0]];
 
   for (let i = 1; i < sorted.length; i++) {
-    const gap = gapBetween(sorted[i - 1], sorted[i]);
-    if (gap > columnThreshold) {
-      cells.push(cell);
-      cell = [sorted[i]];
+    const prev = group[group.length - 1];
+    const curr = sorted[i];
+    const gap = gapBetween(prev, curr);
+    const fs = Math.max(prev.fontSize, curr.fontSize);
+
+    if (gap <= fs * 1.2) {
+      group.push(curr);
     } else {
-      cell.push(sorted[i]);
+      if (group.length === 1) merged.push(group[0]);
+      else {
+        const r = regionFromBlocks(group);
+        if (r) merged.push({ ...r, id: uuidv4(), columnIndex: prev.columnIndex });
+      }
+      group = [curr];
     }
   }
-  cells.push(cell);
 
-  return cells;
+  if (group.length === 1) merged.push(group[0]);
+  else {
+    const r = regionFromBlocks(group);
+    if (r) merged.push({ ...r, id: uuidv4(), columnIndex: group[0].columnIndex });
+  }
+
+  return merged;
 }
 
+/** Get all blocks in the same table cell as the clicked point. */
 export function getCellBlocksAtPoint(
   blocks: PdfTextBlock[],
   pageIndex: number,
@@ -174,14 +225,10 @@ export function getCellBlocksAtPoint(
   const hit = hitTestBlock(blocks, pageIndex, x, y);
   if (!hit) return [];
 
-  const line = getLineBlocks(blocks, pageIndex, hit);
-  const cells = splitLineIntoCells(line);
-
-  for (const cell of cells) {
-    if (cell.some((b) => b.id === hit.id)) return cell;
-  }
-
-  return [hit];
+  const columnIndex = hit.columnIndex ?? 0;
+  return getLineBlocks(blocks, pageIndex, hit).filter(
+    (b) => (b.columnIndex ?? 0) === columnIndex
+  );
 }
 
 export function getFieldRegionAtPoint(
@@ -193,25 +240,6 @@ export function getFieldRegionAtPoint(
   const cellBlocks = getCellBlocksAtPoint(blocks, pageIndex, x, y);
   if (cellBlocks.length === 0) return null;
   return regionFromBlocks(cellBlocks);
-}
-
-/** @deprecated Use getFieldRegionAtPoint — kept for compatibility */
-export function getFieldBlocksAtPoint(
-  blocks: PdfTextBlock[],
-  pageIndex: number,
-  x: number,
-  y: number
-): PdfTextBlock[] {
-  return getCellBlocksAtPoint(blocks, pageIndex, x, y);
-}
-
-export function getLineRegionAtPoint(
-  blocks: PdfTextBlock[],
-  pageIndex: number,
-  x: number,
-  y: number
-): TextEditRegion | null {
-  return getFieldRegionAtPoint(blocks, pageIndex, x, y);
 }
 
 function rectsIntersect(a: Rect, b: Rect) {
@@ -231,12 +259,7 @@ export function getBlocksInRect(
   return blocks
     .filter((b) => b.pageIndex === pageIndex)
     .filter((b) =>
-      rectsIntersect(rect, {
-        x: b.x,
-        y: b.y,
-        width: b.width,
-        height: b.height,
-      })
+      rectsIntersect(rect, { x: b.x, y: b.y, width: b.width, height: b.height })
     )
     .sort((a, b) => a.y - b.y || a.x - b.x);
 }
@@ -249,21 +272,18 @@ export function getRegionInRect(
   const selected = getBlocksInRect(blocks, pageIndex, rect);
   if (selected.length === 0) return [];
 
-  // Group selected blocks by line, then pick cells that intersect the rect
-  const lines: PdfTextBlock[][] = [];
-  for (const block of selected) {
-    const line = lines.find((group) => sameLine(group[0], block));
-    if (line) line.push(block);
-    else lines.push([block]);
-  }
-
   const result: PdfTextBlock[] = [];
-  for (const line of lines) {
-    const cells = splitLineIntoCells(line);
-    for (const cell of cells) {
-      const cellBounds = boundsFromBlocks(cell);
-      if (rectsIntersect(rect, cellBounds)) {
-        result.push(...cell);
+  const seen = new Set<string>();
+
+  for (const block of selected) {
+    const columnIndex = block.columnIndex ?? 0;
+    const line = getLineBlocks(blocks, pageIndex, block);
+    const cellBlocks = line.filter((b) => (b.columnIndex ?? 0) === columnIndex);
+
+    for (const b of cellBlocks) {
+      if (!seen.has(b.id) && rectsIntersect(rect, boundsFromBlocks([b]))) {
+        seen.add(b.id);
+        result.push(b);
       }
     }
   }
@@ -290,13 +310,14 @@ export function normalizeDragRect(x1: number, y1: number, x2: number, y2: number
   };
 }
 
-/** Merge raw pdf.js items into one block per table cell / field. */
+/** Build one editable block per table cell. */
 export function mergeExtractedLines(blocks: PdfTextBlock[]): PdfTextBlock[] {
   if (blocks.length === 0) return [];
-  const sorted = [...blocks].sort((a, b) => a.y - b.y || a.x - b.x);
+
+  const withColumns = assignColumnIndices(blocks);
   const lines: PdfTextBlock[][] = [];
 
-  for (const block of sorted) {
+  for (const block of withColumns) {
     const line = lines.find((group) => sameLine(group[0], block));
     if (line) line.push(block);
     else lines.push([block]);
@@ -304,10 +325,17 @@ export function mergeExtractedLines(blocks: PdfTextBlock[]): PdfTextBlock[] {
 
   const merged: PdfTextBlock[] = [];
   for (const line of lines) {
-    const cells = splitLineIntoCells(line);
-    for (const cell of cells) {
-      const r = regionFromBlocks(cell);
-      if (r) merged.push({ ...r, id: uuidv4() });
+    const columns = new Map<number, PdfTextBlock[]>();
+    for (const block of line) {
+      const col = block.columnIndex ?? 0;
+      const group = columns.get(col) ?? [];
+      group.push(block);
+      columns.set(col, group);
+    }
+
+    for (const cellBlocks of columns.values()) {
+      const words = mergeWordsInCell(cellBlocks);
+      merged.push(...words);
     }
   }
 
