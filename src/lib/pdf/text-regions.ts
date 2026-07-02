@@ -215,8 +215,27 @@ function mergeWordsInCell(blocks: PdfTextBlock[]): PdfTextBlock[] {
   return merged;
 }
 
-/** Get all blocks in the same table cell as the clicked point. */
-export function getCellBlocksAtPoint(
+/** True for form/schedule rows — edit one cell at a time. False for titles/headers — edit full line. */
+export function isTableDataRow(line: PdfTextBlock[]): boolean {
+  const cols = new Set(line.map((b) => b.columnIndex ?? 0));
+  if (cols.size < 2) return false;
+
+  // Schedule rows (Date | Time | Time | Time)
+  if (cols.size >= 3) return true;
+
+  const leftCol = Math.min(...cols);
+  const leftText = line
+    .filter((b) => (b.columnIndex ?? 0) === leftCol)
+    .map((b) => b.text)
+    .join(" ");
+
+  const labelPattern =
+    /\b(Number|Name|Birth|Venue|Date|Time|Roll|Timing|Reporting|Closure|Test|Exam|Candidate|Registration)\b/i;
+  return labelPattern.test(leftText);
+}
+
+/** Get blocks to edit at click point — full line for titles, single cell for table rows. */
+export function getEditBlocksAtPoint(
   blocks: PdfTextBlock[],
   pageIndex: number,
   x: number,
@@ -225,10 +244,24 @@ export function getCellBlocksAtPoint(
   const hit = hitTestBlock(blocks, pageIndex, x, y);
   if (!hit) return [];
 
-  const columnIndex = hit.columnIndex ?? 0;
-  return getLineBlocks(blocks, pageIndex, hit).filter(
-    (b) => (b.columnIndex ?? 0) === columnIndex
-  );
+  const line = getLineBlocks(blocks, pageIndex, hit);
+
+  if (isTableDataRow(line)) {
+    const columnIndex = hit.columnIndex ?? 0;
+    return line.filter((b) => (b.columnIndex ?? 0) === columnIndex);
+  }
+
+  return line;
+}
+
+/** Get all blocks in the same table cell as the clicked point. */
+export function getCellBlocksAtPoint(
+  blocks: PdfTextBlock[],
+  pageIndex: number,
+  x: number,
+  y: number
+): PdfTextBlock[] {
+  return getEditBlocksAtPoint(blocks, pageIndex, x, y);
 }
 
 export function getFieldRegionAtPoint(
@@ -237,9 +270,9 @@ export function getFieldRegionAtPoint(
   x: number,
   y: number
 ): TextEditRegion | null {
-  const cellBlocks = getCellBlocksAtPoint(blocks, pageIndex, x, y);
-  if (cellBlocks.length === 0) return null;
-  return regionFromBlocks(cellBlocks);
+  const editBlocks = getEditBlocksAtPoint(blocks, pageIndex, x, y);
+  if (editBlocks.length === 0) return null;
+  return regionFromBlocks(editBlocks);
 }
 
 function rectsIntersect(a: Rect, b: Rect) {
@@ -325,17 +358,26 @@ export function mergeExtractedLines(blocks: PdfTextBlock[]): PdfTextBlock[] {
 
   const merged: PdfTextBlock[] = [];
   for (const line of lines) {
-    const columns = new Map<number, PdfTextBlock[]>();
-    for (const block of line) {
-      const col = block.columnIndex ?? 0;
-      const group = columns.get(col) ?? [];
-      group.push(block);
-      columns.set(col, group);
-    }
+    if (isTableDataRow(line)) {
+      const columns = new Map<number, PdfTextBlock[]>();
+      for (const block of line) {
+        const col = block.columnIndex ?? 0;
+        const group = columns.get(col) ?? [];
+        group.push(block);
+        columns.set(col, group);
+      }
 
-    for (const cellBlocks of columns.values()) {
-      const words = mergeWordsInCell(cellBlocks);
-      merged.push(...words);
+      for (const cellBlocks of columns.values()) {
+        const words = mergeWordsInCell(cellBlocks);
+        merged.push(...words);
+      }
+    } else {
+      const words = mergeWordsInCell(line);
+      if (words.length === 1) merged.push(words[0]);
+      else {
+        const r = regionFromBlocks(line);
+        if (r) merged.push({ ...r, id: uuidv4() });
+      }
     }
   }
 

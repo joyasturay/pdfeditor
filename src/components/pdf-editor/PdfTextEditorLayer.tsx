@@ -278,7 +278,7 @@ export function PdfTextEditorLayer({ editor, canvasSize }: PdfTextEditorLayerPro
         <div className="pointer-events-none absolute bottom-2 left-1/2 max-w-md -translate-x-1/2 rounded-lg bg-blue-600/90 px-3 py-1.5 text-center text-xs text-white">
           {editor.textEditSubMode === "marquee"
             ? "Drag to select text · release to edit"
-            : "Click any text to edit · Enter to save · Esc to cancel"}
+            : "Click to edit · table cells edit individually · Enter to save"}
         </div>
       )}
     </div>
