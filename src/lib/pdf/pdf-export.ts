@@ -2,7 +2,7 @@
 
 import { PDFDocument, rgb, StandardFonts, type PDFPage, type PDFFont } from "pdf-lib";
 import type { Annotation, PdfTextBlock } from "./types";
-import { blockTextBaseline } from "./types";
+import { boundsFromBlocks, combineBlockTexts, parseRegionBlockIds } from "./text-regions";
 import { loadPdfDocument } from "./pdf-loader";
 
 async function savePdf(doc: PDFDocument) {
@@ -44,31 +44,43 @@ function applyEditsToPage(
   scale: number,
   annotations: Annotation[],
   textBlocks: PdfTextBlock[],
-  textEdits: Record<string, string>,
+  regionEdits: Record<string, string>,
   font: PDFFont
 ) {
   const pageTextBlocks = textBlocks.filter((b) => b.pageIndex === pageIndex);
-  for (const block of pageTextBlocks) {
-    const newText = textEdits[block.id];
-    if (newText === undefined || newText === block.text) continue;
+  const consumed = new Set<string>();
 
+  for (const [regionId, newText] of Object.entries(regionEdits)) {
+    const blockIds = parseRegionBlockIds(regionId);
+    const blocks = pageTextBlocks.filter((b) => blockIds.includes(b.id));
+    if (blocks.length === 0) continue;
+
+    const original = combineBlockTexts(blocks);
+    if (newText === original) continue;
+
+    const bounds = boundsFromBlocks(blocks);
+    const fontSize = Math.max(...blocks.map((b) => b.fontSize));
     const pad = 2 / scale;
     page.drawRectangle({
-      x: block.x / scale - pad,
-      y: canvasToPdfY(block.y + block.height, pageHeight, scale) - pad,
-      width: block.width / scale + pad * 2,
-      height: block.height / scale + pad * 2,
+      x: bounds.x / scale - pad,
+      y: canvasToPdfY(bounds.y + bounds.height, pageHeight, scale) - pad,
+      width: bounds.width / scale + pad * 2,
+      height: bounds.height / scale + pad * 2,
       color: rgb(1, 1, 1),
     });
 
     page.drawText(newText, {
-      x: block.x / scale,
-      y: canvasToPdfY(blockTextBaseline(block), pageHeight, scale),
-      size: block.fontSize / scale,
+      x: bounds.x / scale,
+      y: canvasToPdfY(bounds.y + fontSize * 0.85, pageHeight, scale),
+      size: fontSize / scale,
       font,
       color: rgb(0, 0, 0),
     });
+
+    blockIds.forEach((id) => consumed.add(id));
   }
+
+  void consumed;
 
   const pageAnnotations = annotations.filter((a) => a.pageIndex === pageIndex);
   for (const ann of pageAnnotations) {
@@ -160,7 +172,7 @@ export async function exportPdfWithAnnotations(
   pageRotations: Record<number, number>,
   scale: number,
   textBlocks: PdfTextBlock[] = [],
-  textEdits: Record<string, string> = {}
+  regionEdits: Record<string, string> = {}
 ): Promise<Uint8Array> {
   const src = await loadPdfDocument(pdfBytes);
   const pdfDoc = await PDFDocument.create();
@@ -205,7 +217,7 @@ export async function exportPdfWithAnnotations(
       scale,
       annotations,
       textBlocks,
-      textEdits,
+      regionEdits,
       font
     );
   }

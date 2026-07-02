@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
-import type { Annotation, PdfDocumentState, PdfTextBlock, Tool } from "@/lib/pdf/types";
+import type { Annotation, PdfDocumentState, PdfTextBlock, TextEditSubMode, Tool } from "@/lib/pdf/types";
 import {
   DEFAULT_COLOR,
   DEFAULT_FONT_SIZE,
@@ -19,6 +19,8 @@ import {
 } from "@/lib/pdf/pdf-export";
 import { extractAllTextBlocks, extractPageTextBlocksFromBytes } from "@/lib/pdf/pdf-text-extract";
 import { loadPdfDocument } from "@/lib/pdf/pdf-loader";
+import type { TextEditRegion } from "@/lib/pdf/text-regions";
+import { parseRegionBlockIds } from "@/lib/pdf/text-regions";
 
 const RENDER_SCALE = 1.5;
 
@@ -31,8 +33,9 @@ export function usePdfEditor() {
   const [strokeWidth, setStrokeWidth] = useState(DEFAULT_STROKE_WIDTH);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [textBlocks, setTextBlocks] = useState<PdfTextBlock[]>([]);
-  const [textEdits, setTextEdits] = useState<Record<string, string>>({});
-  const [editingTextBlockId, setEditingTextBlockId] = useState<string | null>(null);
+  const [regionEdits, setRegionEdits] = useState<Record<string, string>>({});
+  const [editingRegion, setEditingRegion] = useState<TextEditRegion | null>(null);
+  const [textEditSubMode, setTextEditSubMode] = useState<TextEditSubMode>("click");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pageRotations, setPageRotations] = useState<Record<number, number>>({});
   const [zoom, setZoom] = useState(1);
@@ -87,11 +90,12 @@ export function usePdfEditor() {
       });
       setCurrentPage(0);
       setAnnotations([]);
-      setTextEdits({});
-      setEditingTextBlockId(null);
+      setRegionEdits({});
+      setEditingRegion(null);
       setSelectedId(null);
       setPageRotations({});
       setZoom(1);
+      setTextEditSubMode("click");
       setEditorSession((s) => s + 1);
       await loadTextBlocks(bytes);
     },
@@ -125,32 +129,37 @@ export function usePdfEditor() {
       });
       setCurrentPage(0);
       setAnnotations([]);
-      setTextEdits({});
-      setEditingTextBlockId(null);
+      setRegionEdits({});
+      setEditingRegion(null);
       setSelectedId(null);
       setPageRotations({});
+      setTextEditSubMode("click");
       setEditorSession((s) => s + 1);
       await loadTextBlocks(merged);
     },
     [loadTextBlocks]
   );
 
-  const getBlockText = useCallback(
-    (block: PdfTextBlock) => textEdits[block.id] ?? block.text,
-    [textEdits]
+  const getRegionText = useCallback(
+    (region: TextEditRegion) => regionEdits[region.id] ?? region.text,
+    [regionEdits]
   );
 
-  const updateTextEdit = useCallback((blockId: string, text: string) => {
-    setTextEdits((prev) => {
-      const block = textBlocks.find((b) => b.id === blockId);
-      if (!block || text === block.text) {
+  const commitRegionEdit = useCallback((region: TextEditRegion, text: string) => {
+    setRegionEdits((prev) => {
+      if (text === region.text) {
         const next = { ...prev };
-        delete next[blockId];
+        delete next[region.id];
         return next;
       }
-      return { ...prev, [blockId]: text };
+      return { ...prev, [region.id]: text };
     });
-  }, [textBlocks]);
+    setEditingRegion(null);
+  }, []);
+
+  const startEditingRegion = useCallback((region: TextEditRegion | null) => {
+    setEditingRegion(region);
+  }, []);
 
   const addAnnotation = useCallback((partial: Omit<Annotation, "id">) => {
     const ann: Annotation = { ...partial, id: uuidv4() };
@@ -201,8 +210,8 @@ export function usePdfEditor() {
   const reloadDocument = useCallback(
     async (bytes: Uint8Array, pageCount: number) => {
       updateDocumentBytes(bytes, pageCount);
-      setTextEdits({});
-      setEditingTextBlockId(null);
+      setRegionEdits({});
+      setEditingRegion(null);
       await loadTextBlocks(bytes);
     },
     [loadTextBlocks, updateDocumentBytes]
@@ -219,13 +228,7 @@ export function usePdfEditor() {
         ...prev.filter((b) => b.pageIndex !== pageIndex),
         ...newPageBlocks,
       ]);
-      setTextEdits((prev) => {
-        const next = { ...prev };
-        for (const key of Object.keys(next)) {
-          if (!newPageBlocks.some((b) => b.id === key)) delete next[key];
-        }
-        return next;
-      });
+      setRegionEdits({});
     },
     []
   );
@@ -242,10 +245,11 @@ export function usePdfEditor() {
           b.pageIndex > currentPage ? { ...b, pageIndex: b.pageIndex - 1 } : b
         );
       const keptIds = new Set(nextBlocks.map((b) => b.id));
-      setTextEdits((edits) => {
+      setRegionEdits((edits) => {
         const next: Record<string, string> = {};
         for (const [id, val] of Object.entries(edits)) {
-          if (keptIds.has(id)) next[id] = val;
+          const blockIds = parseRegionBlockIds(id);
+          if (blockIds.every((bid) => keptIds.has(bid))) next[id] = val;
         }
         return next;
       });
@@ -269,13 +273,7 @@ export function usePdfEditor() {
       ...prev,
       [currentPage]: nextRotation,
     }));
-    setTextEdits((prev) => {
-      const next = { ...prev };
-      for (const block of textBlocks) {
-        if (block.pageIndex === currentPage) delete next[block.id];
-      }
-      return next;
-    });
+    setRegionEdits({});
     const newPageBlocks = await extractPageTextBlocksFromBytes(
       document.bytes,
       currentPage,
@@ -287,7 +285,7 @@ export function usePdfEditor() {
       ...newPageBlocks,
     ]);
     setEditorSession((s) => s + 1);
-  }, [document, currentPage, pageRotations, textBlocks]);
+  }, [document, currentPage, pageRotations]);
 
   const handleAddBlankPage = useCallback(async () => {
     if (!document) return;
@@ -312,7 +310,7 @@ export function usePdfEditor() {
         pageRotations,
         RENDER_SCALE,
         textBlocks,
-        textEdits
+        regionEdits
       );
       downloadBytes(exported, `${document.name}-edited.pdf`);
     } catch (err) {
@@ -321,7 +319,7 @@ export function usePdfEditor() {
     } finally {
       setIsExporting(false);
     }
-  }, [document, annotations, pageRotations, textBlocks, textEdits]);
+  }, [document, annotations, pageRotations, textBlocks, regionEdits]);
 
   const reset = useCallback(() => {
     loadSessionRef.current += 1;
@@ -329,14 +327,15 @@ export function usePdfEditor() {
     setCurrentPage(0);
     setAnnotations([]);
     setTextBlocks([]);
-    setTextEdits({});
-    setEditingTextBlockId(null);
+    setRegionEdits({});
+    setEditingRegion(null);
     setSelectedId(null);
     setPageRotations({});
     setZoom(1);
     setTextBlocksLoading(false);
     setIsExporting(false);
     setTool("editText");
+    setTextEditSubMode("click");
     setEditorSession((s) => s + 1);
   }, []);
 
@@ -354,12 +353,14 @@ export function usePdfEditor() {
     setStrokeWidth,
     annotations,
     textBlocks,
-    textEdits,
+    regionEdits,
     textBlocksLoading,
-    editingTextBlockId,
-    setEditingTextBlockId,
-    getBlockText,
-    updateTextEdit,
+    editingRegion,
+    textEditSubMode,
+    setTextEditSubMode,
+    getRegionText,
+    commitRegionEdit,
+    startEditingRegion,
     selectedId,
     setSelectedId,
     pageRotations,

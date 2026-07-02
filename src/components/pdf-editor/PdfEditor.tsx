@@ -20,7 +20,9 @@ export function PdfEditor({ editor }: PdfEditorProps) {
           <p className="text-xs text-zinc-500">
             {editor.document.pageCount} pages ·{" "}
             {editor.tool === "editText"
-              ? "Click any text to edit it · Download to save changes"
+              ? editor.textEditSubMode === "marquee"
+                ? "Drag a box over text to select and edit in one go"
+                : "Click any text field to edit · use area-select for large blocks"
               : "Annotate with toolbar tools · Download to export"}
           </p>
         </div>

@@ -5,8 +5,7 @@ import type { PdfEditorState } from "@/hooks/usePdfEditor";
 import type { Annotation, Point } from "@/lib/pdf/types";
 import { loadPdfDocument, renderPageToCanvas } from "@/lib/pdf/pdf-loader";
 import { PdfTextEditorLayer } from "./PdfTextEditorLayer";
-import { blockTextBaseline } from "@/lib/pdf/types";
-import { getDisplayWidth } from "@/lib/pdf/pdf-text-extract";
+import { boundsFromBlocks, combineBlockTexts, parseRegionBlockIds } from "@/lib/pdf/text-regions";
 
 interface PdfCanvasProps {
   editor: PdfEditorState;
@@ -139,7 +138,7 @@ export function PdfCanvas({ editor }: PdfCanvasProps) {
     (a) => a.pageIndex === editor.currentPage
   );
 
-  const textEditsKey = JSON.stringify(editor.textEdits);
+  const regionEditsKey = JSON.stringify(editor.regionEdits);
 
   // Render PDF base layer ONLY when document/page/scale changes — never on annotation edits
   useEffect(() => {
@@ -191,20 +190,28 @@ export function PdfCanvas({ editor }: PdfCanvasProps) {
     const pageTextBlocks = editor.textBlocks.filter(
       (b) => b.pageIndex === editor.currentPage
     );
-    for (const block of pageTextBlocks) {
-      const newText = editor.textEdits[block.id];
-      const isEditing = editor.editingTextBlockId === block.id;
-      if (!isEditing && (newText === undefined || newText === block.text)) continue;
-
-      ctx.fillStyle = "#ffffff";
-      const w = getDisplayWidth(block, canvas.width);
-      ctx.fillRect(block.x - 2, block.y - 2, w + 4, block.height + 4);
-
-      if (newText !== undefined && newText !== block.text) {
-        ctx.fillStyle = "#000000";
-        ctx.font = `${block.fontSize}px Helvetica, Arial, sans-serif`;
-        ctx.fillText(newText, block.x, blockTextBaseline(block));
+    for (const [regionId, newText] of Object.entries(editor.regionEdits)) {
+      const blockIds = parseRegionBlockIds(regionId);
+      const blocks = pageTextBlocks.filter((b) => blockIds.includes(b.id));
+      if (blocks.length === 0) continue;
+      const original = combineBlockTexts(blocks);
+      if (newText === original) continue;
+      const isEditing =
+        editor.editingRegion &&
+        editor.editingRegion.id === regionId;
+      if (isEditing) {
+        const bounds = boundsFromBlocks(blocks);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(bounds.x - 2, bounds.y - 2, bounds.width + 4, bounds.height + 4);
+        continue;
       }
+      const bounds = boundsFromBlocks(blocks);
+      const fontSize = Math.max(...blocks.map((b) => b.fontSize));
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(bounds.x - 2, bounds.y - 2, bounds.width + 4, bounds.height + 4);
+      ctx.fillStyle = "#000000";
+      ctx.font = `${fontSize}px Helvetica, Arial, sans-serif`;
+      ctx.fillText(newText, bounds.x, bounds.y + fontSize * 0.85);
     }
 
     for (const ann of pageAnnotations) {
@@ -217,8 +224,8 @@ export function PdfCanvas({ editor }: PdfCanvasProps) {
     pdfReady,
     editor.currentPage,
     editor.selectedId,
-    editor.editingTextBlockId,
-    textEditsKey,
+    editor.editingRegion,
+    regionEditsKey,
     pageAnnotations,
     previewAnn,
   ]);

@@ -18,6 +18,7 @@ import {
   Scissors,
   Undo2,
   TextCursorInput,
+  Scan,
 } from "lucide-react";
 import type { PdfEditorState } from "@/hooks/usePdfEditor";
 import type { Tool } from "@/lib/pdf/types";
@@ -49,7 +50,7 @@ export function Toolbar({ editor }: ToolbarProps) {
             type="button"
             title={TOOL_LABELS[id]}
             onClick={() => {
-              editor.setEditingTextBlockId(null);
+              editor.startEditingRegion(null);
               editor.setTool(id);
             }}
             className={`rounded-lg p-2 transition ${
@@ -62,6 +63,35 @@ export function Toolbar({ editor }: ToolbarProps) {
           </button>
         ))}
       </div>
+
+      {editor.tool === "editText" && (
+        <div className="flex items-center gap-1 rounded-xl bg-zinc-100 p-1 dark:bg-zinc-900">
+          <button
+            type="button"
+            title="Click to edit text"
+            onClick={() => editor.setTextEditSubMode("click")}
+            className={`rounded-lg p-2 transition ${
+              editor.textEditSubMode === "click"
+                ? "bg-blue-600 text-white shadow"
+                : "text-zinc-600 hover:bg-zinc-200 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            }`}
+          >
+            <TextCursorInput className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            title="Drag to select text area"
+            onClick={() => editor.setTextEditSubMode("marquee")}
+            className={`rounded-lg p-2 transition ${
+              editor.textEditSubMode === "marquee"
+                ? "bg-blue-600 text-white shadow"
+                : "text-zinc-600 hover:bg-zinc-200 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            }`}
+          >
+            <Scan className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       <div className="h-6 w-px bg-zinc-200 dark:bg-zinc-700" />
 

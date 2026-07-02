@@ -9,6 +9,8 @@ export type Tool =
   | "line"
   | "eraser";
 
+export type TextEditSubMode = "click" | "marquee";
+
 export interface Point {
   x: number;
   y: number;
