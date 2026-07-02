@@ -5,7 +5,7 @@ import type { PdfEditorState } from "@/hooks/usePdfEditor";
 import type { TextEditRegion } from "@/lib/pdf/text-regions";
 import {
   getFieldRegionAtPoint,
-  getRegionInRect,
+  getRegionFromRect,
   normalizeDragRect,
   parseRegionBlockIds,
   regionFromBlocks,
@@ -104,7 +104,7 @@ export function PdfTextEditorLayer({ editor, canvasSize }: PdfTextEditorLayerPro
     setDragStart(null);
     setDragCurrent(null);
     if (rect.width < 6 && rect.height < 6) return;
-    const region = getRegionInRect(editor.textBlocks, editor.currentPage, rect);
+    const region = getRegionFromRect(editor.textBlocks, editor.currentPage, rect);
     if (region) openRegion(region);
   };
 
