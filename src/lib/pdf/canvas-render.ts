@@ -75,51 +75,67 @@ export function drawAnnotationOnCanvas(
   ctx.restore();
 }
 
-/** Opaque white mask over original PDF text — sized generously so nothing bleeds through. */
+function samplePdfBackground(
+  pdfCtx: CanvasRenderingContext2D,
+  bounds: { x: number; y: number; width: number; height: number }
+) {
+  const cx = Math.min(
+    Math.max(0, Math.round(bounds.x + bounds.width / 2)),
+    pdfCtx.canvas.width - 1
+  );
+  const cy = Math.min(
+    Math.max(0, Math.round(bounds.y + bounds.height / 2)),
+    pdfCtx.canvas.height - 1
+  );
+  const [r, g, b] = pdfCtx.getImageData(cx, cy, 1, 1).data;
+  return `rgb(${r},${g},${b})`;
+}
+
+/**
+ * Paint over original PDF text using the sampled background color from the PDF
+ * canvas — so grey table cells stay grey instead of getting a white sticker.
+ */
 export function drawTextMaskForBlocks(
-  ctx: CanvasRenderingContext2D,
+  pdfCtx: CanvasRenderingContext2D,
+  overlayCtx: CanvasRenderingContext2D,
   blocks: PdfTextBlock[],
   displayText?: string
 ) {
   if (blocks.length === 0) return;
 
-  ctx.save();
-  ctx.fillStyle = "#ffffff";
+  const bounds = boundsFromBlocks(blocks);
+  const fontSize = Math.max(...blocks.map((b) => b.fontSize));
 
-  for (const block of blocks) {
-    const coverWidth = Math.max(
-      block.width,
-      block.text.length * block.fontSize * 0.58,
-      block.fontSize * 1.5
-    );
-    ctx.fillRect(
-      block.x - 4,
-      block.y - 4,
-      coverWidth + 8,
-      block.height + 8
-    );
-  }
+  overlayCtx.save();
+  overlayCtx.fillStyle = samplePdfBackground(pdfCtx, bounds);
 
+  const blockRight = Math.max(
+    ...blocks.map((b) => b.x + Math.max(b.width, b.text.length * b.fontSize * 0.65))
+  );
+
+  let coverRight = blockRight;
   if (displayText) {
-    const bounds = boundsFromBlocks(blocks);
-    const fontSize = Math.max(...blocks.map((b) => b.fontSize));
-    ctx.font = `${fontSize}px Helvetica, Arial, sans-serif`;
-    const measured = ctx.measureText(displayText).width;
-    const coverWidth = Math.max(bounds.width, measured) + 8;
-    ctx.fillRect(
-      bounds.x - 4,
-      bounds.y - 4,
-      coverWidth,
-      bounds.height + 8
+    overlayCtx.font = `${fontSize}px Helvetica, Arial, sans-serif`;
+    coverRight = Math.max(
+      coverRight,
+      bounds.x + overlayCtx.measureText(displayText).width + 6
     );
   }
 
-  ctx.restore();
+  overlayCtx.fillRect(
+    bounds.x - 6,
+    bounds.y - 6,
+    coverRight - bounds.x + 12,
+    bounds.height + 12
+  );
+
+  overlayCtx.restore();
 }
 
-/** Draw committed text edits on canvas (masks original + draws new text). */
+/** Draw committed text edits (background-matched mask + new text). */
 export function drawRegionEditsOnCanvas(
-  ctx: CanvasRenderingContext2D,
+  pdfCtx: CanvasRenderingContext2D,
+  overlayCtx: CanvasRenderingContext2D,
   pageIndex: number,
   textBlocks: PdfTextBlock[],
   regionEdits: Record<string, string>
@@ -134,13 +150,13 @@ export function drawRegionEditsOnCanvas(
     const original = combineBlockTexts(blocks);
     if (newText === original) continue;
 
-    drawTextMaskForBlocks(ctx, blocks, newText);
+    drawTextMaskForBlocks(pdfCtx, overlayCtx, blocks, newText);
 
     const bounds = boundsFromBlocks(blocks);
     const fontSize = Math.max(...blocks.map((b) => b.fontSize));
-    ctx.font = `${fontSize}px Helvetica, Arial, sans-serif`;
-    ctx.fillStyle = "#000000";
-    ctx.fillText(
+    overlayCtx.font = `${fontSize}px Helvetica, Arial, sans-serif`;
+    overlayCtx.fillStyle = "#000000";
+    overlayCtx.fillText(
       newText,
       bounds.x,
       blockTextBaseline({ ...blocks[0], y: bounds.y, fontSize })
@@ -148,11 +164,11 @@ export function drawRegionEditsOnCanvas(
   }
 }
 
-/** Mask original PDF text while the user is actively editing a region. */
 export function drawEditingMaskOnCanvas(
-  ctx: CanvasRenderingContext2D,
+  pdfCtx: CanvasRenderingContext2D,
+  overlayCtx: CanvasRenderingContext2D,
   blocks: PdfTextBlock[],
   displayText: string
 ) {
-  drawTextMaskForBlocks(ctx, blocks, displayText);
+  drawTextMaskForBlocks(pdfCtx, overlayCtx, blocks, displayText);
 }

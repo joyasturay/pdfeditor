@@ -60,7 +60,7 @@ export async function exportPdfWithAnnotations(
       canvas,
     }).promise;
 
-    drawRegionEditsOnCanvas(ctx, i, textBlocks, regionEdits);
+    drawRegionEditsOnCanvas(ctx, ctx, i, textBlocks, regionEdits);
 
     const pageAnnotations = annotations.filter((a) => a.pageIndex === i);
     for (const ann of pageAnnotations) {

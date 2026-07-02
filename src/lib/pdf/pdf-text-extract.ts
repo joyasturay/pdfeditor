@@ -139,11 +139,9 @@ export async function extractPageTextBlocks(
       continue;
     }
 
-    // Cap width to 1.25× estimated — prevents oversized white covers on export
-    const width = Math.min(
-      reportedWidth > 0 ? reportedWidth : estimated,
-      estimated * 1.25
-    );
+    // Use pdf.js reported width so masks cover the full rendered text
+    const width =
+      reportedWidth > 0 ? Math.max(reportedWidth, estimated * 0.85) : estimated;
 
     raw.push({
       id: uuidv4(),

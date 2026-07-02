@@ -135,7 +135,12 @@ export function PdfCanvas({ editor }: PdfCanvasProps) {
       (b) => b.pageIndex === editor.currentPage
     );
 
+    const pdfCanvas = pdfCanvasRef.current;
+    const pdfCtx = pdfCanvas?.getContext("2d");
+    if (!pdfCtx) return;
+
     drawRegionEditsOnCanvas(
+      pdfCtx,
       ctx,
       editor.currentPage,
       pageTextBlocks,
@@ -146,7 +151,7 @@ export function PdfCanvas({ editor }: PdfCanvasProps) {
       const editBlocks = pageTextBlocks.filter((b) =>
         editor.editingRegion!.blockIds.includes(b.id)
       );
-      drawEditingMaskOnCanvas(ctx, editBlocks, editor.editingDraft);
+      drawEditingMaskOnCanvas(pdfCtx, ctx, editBlocks, editor.editingDraft);
     }
 
     for (const ann of pageAnnotations) {
