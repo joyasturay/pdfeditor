@@ -75,22 +75,58 @@ export function drawAnnotationOnCanvas(
   ctx.restore();
 }
 
-/**
- * Bake committed text edits onto a canvas.
- * Used exclusively for export — editor preview uses React div layer instead.
- */
+/** Opaque white mask over original PDF text — sized generously so nothing bleeds through. */
+export function drawTextMaskForBlocks(
+  ctx: CanvasRenderingContext2D,
+  blocks: PdfTextBlock[],
+  displayText?: string
+) {
+  if (blocks.length === 0) return;
+
+  ctx.save();
+  ctx.fillStyle = "#ffffff";
+
+  for (const block of blocks) {
+    const coverWidth = Math.max(
+      block.width,
+      block.text.length * block.fontSize * 0.58,
+      block.fontSize * 1.5
+    );
+    ctx.fillRect(
+      block.x - 4,
+      block.y - 4,
+      coverWidth + 8,
+      block.height + 8
+    );
+  }
+
+  if (displayText) {
+    const bounds = boundsFromBlocks(blocks);
+    const fontSize = Math.max(...blocks.map((b) => b.fontSize));
+    ctx.font = `${fontSize}px Helvetica, Arial, sans-serif`;
+    const measured = ctx.measureText(displayText).width;
+    const coverWidth = Math.max(bounds.width, measured) + 8;
+    ctx.fillRect(
+      bounds.x - 4,
+      bounds.y - 4,
+      coverWidth,
+      bounds.height + 8
+    );
+  }
+
+  ctx.restore();
+}
+
+/** Draw committed text edits on canvas (masks original + draws new text). */
 export function drawRegionEditsOnCanvas(
   ctx: CanvasRenderingContext2D,
   pageIndex: number,
   textBlocks: PdfTextBlock[],
-  regionEdits: Record<string, string>,
-  skipRegionId?: string | null
+  regionEdits: Record<string, string>
 ) {
   const pageTextBlocks = textBlocks.filter((b) => b.pageIndex === pageIndex);
 
   for (const [regionId, newText] of Object.entries(regionEdits)) {
-    if (skipRegionId && regionId === skipRegionId) continue;
-
     const blockIds = parseRegionBlockIds(regionId);
     const blocks = pageTextBlocks.filter((b) => blockIds.includes(b.id));
     if (blocks.length === 0) continue;
@@ -98,20 +134,25 @@ export function drawRegionEditsOnCanvas(
     const original = combineBlockTexts(blocks);
     if (newText === original) continue;
 
+    drawTextMaskForBlocks(ctx, blocks, newText);
+
     const bounds = boundsFromBlocks(blocks);
     const fontSize = Math.max(...blocks.map((b) => b.fontSize));
-
-    // Measure actual rendered text width so cover is exactly right
     ctx.font = `${fontSize}px Helvetica, Arial, sans-serif`;
-    const measured = ctx.measureText(newText).width;
-    const coverWidth = Math.max(bounds.width, measured) + 2;
-
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(bounds.x - 1, bounds.y - 1, coverWidth + 2, bounds.height + 2);
-
     ctx.fillStyle = "#000000";
-    // Use the first block as the baseline reference
-    const baselineY = blockTextBaseline({ ...blocks[0], y: bounds.y, fontSize });
-    ctx.fillText(newText, bounds.x, baselineY);
+    ctx.fillText(
+      newText,
+      bounds.x,
+      blockTextBaseline({ ...blocks[0], y: bounds.y, fontSize })
+    );
   }
+}
+
+/** Mask original PDF text while the user is actively editing a region. */
+export function drawEditingMaskOnCanvas(
+  ctx: CanvasRenderingContext2D,
+  blocks: PdfTextBlock[],
+  displayText: string
+) {
+  drawTextMaskForBlocks(ctx, blocks, displayText);
 }

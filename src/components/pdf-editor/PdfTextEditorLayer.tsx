@@ -7,8 +7,6 @@ import {
   getFieldRegionAtPoint,
   getRegionFromRect,
   normalizeDragRect,
-  parseRegionBlockIds,
-  regionFromBlocks,
 } from "@/lib/pdf/text-regions";
 
 function estimateTextWidth(text: string, fontSize: number) {
@@ -151,37 +149,7 @@ export function PdfTextEditorLayer({ editor, canvasSize }: PdfTextEditorLayerPro
         />
       )}
 
-      {/* Committed edits */}
-      {Object.entries(editor.regionEdits).map(([regionId, text]) => {
-        const blockIds = parseRegionBlockIds(regionId);
-        const blocks = pageBlocks.filter((b) => blockIds.includes(b.id));
-        if (blocks.length === 0) return null;
-        const region = regionFromBlocks(blocks);
-        if (!region) return null;
-        const displayWidth = Math.max(
-          region.width,
-          estimateTextWidth(text, region.fontSize)
-        );
-        return (
-          <div
-            key={regionId}
-            className="pointer-events-none absolute overflow-hidden whitespace-nowrap"
-            style={{
-              left: region.x - 1,
-              top: region.y - 1,
-              width: displayWidth + 2,
-              height: region.height + 2,
-              backgroundColor: "white",
-              fontSize: region.fontSize,
-              lineHeight: `${region.height}px`,
-              fontFamily: "Helvetica, Arial, sans-serif",
-              color: "#000",
-            }}
-          >
-            {text}
-          </div>
-        );
-      })}
+      {/* Committed edits are drawn on the overlay canvas in PdfCanvas */}
 
       {/* Marquee drag rectangle */}
       {previewRect && (
@@ -196,58 +164,45 @@ export function PdfTextEditorLayer({ editor, canvasSize }: PdfTextEditorLayerPro
         />
       )}
 
-      {/* Active text editor — white cover + textarea */}
+      {/* Active text editor — canvas masks original; textarea types on top */}
       {editing && (
-        <>
-          <div
-            className="pointer-events-none absolute"
-            style={{
-              left: editing.x - 2,
-              top: editing.y - 2,
-              width: Math.max(
-                editing.width + 4,
-                estimateTextWidth(displayText, editing.fontSize) + 4
-              ),
-              height: editing.height + 4,
-              backgroundColor: "white",
-            }}
-          />
-          <textarea
-            key={editing.id}
-            ref={inputRef}
-            defaultValue={displayText}
-            className="absolute z-30 resize-none border-0 bg-white p-0 text-black caret-blue-600 outline outline-2 outline-blue-500"
-            style={{
-              left: editing.x,
-              top: editing.y,
-              width: Math.max(
-                editing.width,
-                estimateTextWidth(displayText, editing.fontSize) + 8
-              ),
-              minHeight: editing.height,
-              fontSize: editing.fontSize,
-              lineHeight: `${editing.height}px`,
-              fontFamily: "Helvetica, Arial, sans-serif",
-              overflow: "hidden",
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === "Escape") {
-                e.preventDefault();
-                editor.startEditingRegion(null);
-              }
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                commitEdit((e.target as HTMLTextAreaElement).value);
-              }
-            }}
-            onBlur={(e) => {
-              if (skipBlurRef.current) return;
-              commitEdit(e.target.value);
-            }}
-          />
-        </>
+        <textarea
+          key={editing.id}
+          ref={inputRef}
+          defaultValue={displayText}
+          onChange={(e) => editor.setEditingDraft(e.target.value)}
+          className="absolute z-30 resize-none border-0 bg-transparent p-0 text-black caret-blue-600 outline outline-1 outline-blue-400"
+          style={{
+            left: editing.x,
+            top: editing.y,
+            width: Math.max(
+              editing.width,
+              estimateTextWidth(displayText, editing.fontSize) + 8,
+              canvasSize.width - editing.x - 4
+            ),
+            minHeight: editing.height,
+            fontSize: editing.fontSize,
+            lineHeight: `${editing.height}px`,
+            fontFamily: "Helvetica, Arial, sans-serif",
+            overflow: "hidden",
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Escape") {
+              e.preventDefault();
+              editor.startEditingRegion(null);
+            }
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              commitEdit((e.target as HTMLTextAreaElement).value);
+            }
+          }}
+          onBlur={(e) => {
+            if (skipBlurRef.current) return;
+            commitEdit(e.target.value);
+          }}
+        />
       )}
 
       {/* Invisible interaction layer — only shown when not actively editing */}

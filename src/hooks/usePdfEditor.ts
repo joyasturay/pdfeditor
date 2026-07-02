@@ -35,6 +35,7 @@ export function usePdfEditor() {
   const [textBlocks, setTextBlocks] = useState<PdfTextBlock[]>([]);
   const [regionEdits, setRegionEdits] = useState<Record<string, string>>({});
   const [editingRegion, setEditingRegion] = useState<TextEditRegion | null>(null);
+  const [editingDraft, setEditingDraft] = useState("");
   const [textEditSubMode, setTextEditSubMode] = useState<TextEditSubMode>("click");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pageRotations, setPageRotations] = useState<Record<number, number>>({});
@@ -98,6 +99,7 @@ export function usePdfEditor() {
       setAnnotations([]);
       setRegionEdits({});
       setEditingRegion(null);
+      setEditingDraft("");
       setSelectedId(null);
       setPageRotations({});
       setZoom(1);
@@ -137,6 +139,7 @@ export function usePdfEditor() {
       setAnnotations([]);
       setRegionEdits({});
       setEditingRegion(null);
+      setEditingDraft("");
       setSelectedId(null);
       setPageRotations({});
       setTextEditSubMode("click");
@@ -161,11 +164,13 @@ export function usePdfEditor() {
       return { ...prev, [region.id]: text };
     });
     setEditingRegion(null);
+    setEditingDraft("");
   }, []);
 
   const startEditingRegion = useCallback((region: TextEditRegion | null) => {
     setEditingRegion(region);
-  }, []);
+    setEditingDraft(region ? (regionEdits[region.id] ?? region.text) : "");
+  }, [regionEdits]);
 
   const addAnnotation = useCallback((partial: Omit<Annotation, "id">) => {
     const ann: Annotation = { ...partial, id: uuidv4() };
@@ -218,6 +223,7 @@ export function usePdfEditor() {
       updateDocumentBytes(bytes, pageCount);
       setRegionEdits({});
       setEditingRegion(null);
+      setEditingDraft("");
       await loadTextBlocks(bytes);
     },
     [loadTextBlocks, updateDocumentBytes]
@@ -331,6 +337,7 @@ export function usePdfEditor() {
     setRegionEdits({});
     setAnnotations([]);
     setEditingRegion(null);
+    setEditingDraft("");
     setSelectedId(null);
   }, []);
 
@@ -345,6 +352,7 @@ export function usePdfEditor() {
     setTextBlocks([]);
     setRegionEdits({});
     setEditingRegion(null);
+    setEditingDraft("");
     setSelectedId(null);
     setPageRotations({});
     setZoom(1);
@@ -372,6 +380,8 @@ export function usePdfEditor() {
     regionEdits,
     textBlocksLoading,
     editingRegion,
+    editingDraft,
+    setEditingDraft,
     textEditSubMode,
     setTextEditSubMode,
     getRegionText,
