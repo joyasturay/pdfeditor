@@ -327,6 +327,16 @@ export function usePdfEditor() {
     }
   }, [document, annotations, pageRotations, textBlocks, regionEdits]);
 
+  const revertChanges = useCallback(() => {
+    setRegionEdits({});
+    setAnnotations([]);
+    setEditingRegion(null);
+    setSelectedId(null);
+  }, []);
+
+  const hasChanges =
+    Object.keys(regionEdits).length > 0 || annotations.length > 0;
+
   const reset = useCallback(() => {
     loadSessionRef.current += 1;
     setDocument(null);
@@ -387,6 +397,8 @@ export function usePdfEditor() {
     handleAddBlankPage,
     handleSplitPage,
     handleExport,
+    revertChanges,
+    hasChanges,
     reset,
   };
 }

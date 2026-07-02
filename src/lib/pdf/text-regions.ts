@@ -113,6 +113,52 @@ export function hitTestBlock(
   return null;
 }
 
+function gapBetween(a: PdfTextBlock, b: PdfTextBlock) {
+  return b.x - (a.x + a.width);
+}
+
+/** Adjacent words in the same table cell / field (e.g. "JOYASTU" + "RAY"). */
+export function isSameFieldGroup(a: PdfTextBlock, b: PdfTextBlock) {
+  if (!sameLine(a, b)) return false;
+  const gap = gapBetween(a, b);
+  const fs = Math.max(a.fontSize, b.fontSize);
+  // Word spacing is ~0.3–2× fontSize; table columns are usually 5×+ apart
+  return gap >= -fs * 0.25 && gap <= fs * 2.2;
+}
+
+export function getFieldBlocksAtPoint(
+  blocks: PdfTextBlock[],
+  pageIndex: number,
+  x: number,
+  y: number
+): PdfTextBlock[] {
+  const hit = hitTestBlock(blocks, pageIndex, x, y);
+  if (!hit) return [];
+
+  const line = getLineBlocks(blocks, pageIndex, hit);
+  const idx = line.findIndex((b) => b.id === hit.id);
+  if (idx < 0) return [hit];
+
+  let start = idx;
+  let end = idx;
+
+  while (start > 0 && isSameFieldGroup(line[start - 1], line[start])) start--;
+  while (end < line.length - 1 && isSameFieldGroup(line[end], line[end + 1])) end++;
+
+  return line.slice(start, end + 1);
+}
+
+export function getFieldRegionAtPoint(
+  blocks: PdfTextBlock[],
+  pageIndex: number,
+  x: number,
+  y: number
+): TextEditRegion | null {
+  const fieldBlocks = getFieldBlocksAtPoint(blocks, pageIndex, x, y);
+  if (fieldBlocks.length === 0) return null;
+  return regionFromBlocks(fieldBlocks);
+}
+
 export function getLineRegionAtPoint(
   blocks: PdfTextBlock[],
   pageIndex: number,
@@ -170,10 +216,7 @@ export function normalizeDragRect(x1: number, y1: number, x2: number, y2: number
   };
 }
 
-/**
- * Merge adjacent items that are clearly part of the same word/token.
- * Uses a tight gap threshold (0.6× fontSize) to keep separate form fields distinct.
- */
+/** Merge words in the same field (e.g. "JOYASTU RAY") while keeping table columns separate. */
 export function mergeExtractedLines(blocks: PdfTextBlock[]): PdfTextBlock[] {
   if (blocks.length === 0) return [];
   const sorted = [...blocks].sort((a, b) => a.y - b.y || a.x - b.x);
@@ -193,10 +236,7 @@ export function mergeExtractedLines(blocks: PdfTextBlock[]): PdfTextBlock[] {
     for (let i = 1; i < line.length; i++) {
       const prev = group[group.length - 1];
       const curr = line[i];
-      const gap = curr.x - (prev.x + prev.width);
-      // Only merge items that are very close — same word / broken char run
-      // Gap > 0.6× fontSize = different form field, keep separate
-      if (gap <= curr.fontSize * 0.6) {
+      if (isSameFieldGroup(prev, curr)) {
         group.push(curr);
       } else {
         const r = regionFromBlocks(group);

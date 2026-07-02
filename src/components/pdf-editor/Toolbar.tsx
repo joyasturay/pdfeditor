@@ -17,6 +17,7 @@ import {
   FilePlus,
   Scissors,
   Undo2,
+  RotateCcw,
   TextCursorInput,
   Scan,
 } from "lucide-react";
@@ -188,6 +189,16 @@ export function Toolbar({ editor }: ToolbarProps) {
       </button>
 
       <div className="ml-auto flex items-center gap-2">
+        <button
+          type="button"
+          title="Revert all text edits and annotations"
+          disabled={!editor.hasChanges}
+          onClick={editor.revertChanges}
+          className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-zinc-800"
+        >
+          <RotateCcw className="h-4 w-4" />
+          Revert
+        </button>
         <button
           type="button"
           title="Close document"
