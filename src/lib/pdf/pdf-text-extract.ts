@@ -23,6 +23,78 @@ function clampBlockBounds(
   return { ...block, x, y, width: Math.max(width, fs * 0.4), height };
 }
 
+function itemToBlocks(
+  str: string,
+  x: number,
+  y: number,
+  fontSize: number,
+  reportedWidth: number,
+  pageIndex: number,
+  pageWidth: number,
+  pageHeight: number
+): PdfTextBlock[] {
+  const trimmed = str.trim();
+  if (!trimmed) return [];
+
+  const estimated = estimateTextWidth(trimmed, fontSize);
+  const useWordSplit = trimmed.includes(" ") && reportedWidth > estimated * 1.6;
+
+  if (useWordSplit) {
+    const words = trimmed.split(/\s+/);
+    const blocks: PdfTextBlock[] = [];
+    let cx = x;
+
+    for (const word of words) {
+      const wordWidth = estimateTextWidth(word, fontSize);
+      if (cx >= pageWidth - 4) break;
+
+      blocks.push({
+        id: uuidv4(),
+        ...clampBlockBounds(
+          {
+            pageIndex,
+            text: word,
+            x: cx,
+            y,
+            width: wordWidth,
+            height: fontSize * 1.15,
+            fontSize,
+          },
+          pageWidth,
+          pageHeight
+        ),
+      });
+      cx += wordWidth + fontSize * 0.28;
+    }
+
+    return blocks;
+  }
+
+  const width = Math.min(
+    reportedWidth > 0 ? reportedWidth : estimated,
+    estimated * 1.25
+  );
+
+  return [
+    {
+      id: uuidv4(),
+      ...clampBlockBounds(
+        {
+          pageIndex,
+          text: trimmed,
+          x,
+          y,
+          width,
+          height: fontSize * 1.15,
+          fontSize,
+        },
+        pageWidth,
+        pageHeight
+      ),
+    },
+  ];
+}
+
 export async function extractPageTextBlocks(
   pdfDoc: PDFDocumentProxy,
   pageIndex: number,
@@ -42,7 +114,7 @@ export async function extractPageTextBlocks(
   for (const item of textContent.items) {
     if (!("str" in item)) continue;
     const str = item.str;
-    if (!str) continue;
+    if (!str || !str.trim()) continue;
 
     const tx = pdfjs.Util.transform(viewport.transform, item.transform);
     const fontSize =
@@ -51,28 +123,19 @@ export async function extractPageTextBlocks(
     const y = tx[5] - fontSize;
     const scaleX = Math.hypot(tx[0], tx[1]) || 1;
     const reportedWidth = Math.abs(item.width * scaleX);
-    const estimated = estimateTextWidth(str, fontSize);
-    const width = Math.min(
-      reportedWidth > 0 ? reportedWidth : estimated,
-      estimated * 1.3
-    );
 
-    raw.push({
-      id: uuidv4(),
-      ...clampBlockBounds(
-        {
-          pageIndex,
-          text: str,
-          x,
-          y,
-          width,
-          height: fontSize * 1.15,
-          fontSize,
-        },
+    raw.push(
+      ...itemToBlocks(
+        str,
+        x,
+        y,
+        fontSize,
+        reportedWidth,
+        pageIndex,
         pageWidth,
         pageHeight
-      ),
-    });
+      )
+    );
   }
 
   return mergeExtractedLines(raw);
@@ -110,5 +173,6 @@ export async function extractPageTextBlocksFromBytes(
 }
 
 export function getDisplayWidth(block: PdfTextBlock, maxX: number) {
-  return Math.min(block.width, Math.max(maxX - block.x, block.fontSize * 0.5));
+  const estimated = estimateTextWidth(block.text, block.fontSize);
+  return Math.min(block.width, estimated * 1.15, Math.max(maxX - block.x, block.fontSize * 0.5));
 }

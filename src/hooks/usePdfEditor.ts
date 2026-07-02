@@ -83,6 +83,12 @@ export function usePdfEditor() {
         return;
       }
 
+      if (/[-_]edited/i.test(file.name)) {
+        alert(
+          "This looks like a previously exported PDF. Upload your original admit card PDF instead — re-editing exported files causes layout distortion."
+        );
+      }
+
       setDocument({
         name: file.name.replace(/\.pdf$/i, ""),
         bytes,

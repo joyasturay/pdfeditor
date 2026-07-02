@@ -4,8 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { PdfEditorState } from "@/hooks/usePdfEditor";
 import type { Annotation, Point } from "@/lib/pdf/types";
 import { loadPdfDocument, renderPageToCanvas } from "@/lib/pdf/pdf-loader";
+import {
+  drawAnnotationOnCanvas,
+  drawRegionEditsOnCanvas,
+  whiteOutRegionBlocks,
+} from "@/lib/pdf/canvas-render";
 import { PdfTextEditorLayer } from "./PdfTextEditorLayer";
-import { boundsFromBlocks, combineBlockTexts, parseRegionBlockIds } from "@/lib/pdf/text-regions";
 
 interface PdfCanvasProps {
   editor: PdfEditorState;
@@ -29,69 +33,10 @@ function drawAnnotation(
   ann: Annotation,
   selected: boolean
 ) {
-  ctx.save();
-
-  switch (ann.type) {
-    case "text": {
-      ctx.font = `${ann.fontSize ?? 16}px sans-serif`;
-      ctx.fillStyle = ann.color;
-      ctx.fillText(ann.text ?? "", ann.x, ann.y + (ann.fontSize ?? 16));
-      break;
-    }
-    case "highlight": {
-      ctx.fillStyle = ann.color + "66";
-      ctx.fillRect(ann.x, ann.y, ann.width ?? 0, ann.height ?? 0);
-      break;
-    }
-    case "rectangle": {
-      ctx.strokeStyle = ann.color;
-      ctx.lineWidth = ann.strokeWidth ?? 2;
-      ctx.strokeRect(ann.x, ann.y, ann.width ?? 0, ann.height ?? 0);
-      break;
-    }
-    case "circle": {
-      ctx.strokeStyle = ann.color;
-      ctx.lineWidth = ann.strokeWidth ?? 2;
-      ctx.beginPath();
-      ctx.ellipse(
-        ann.x + (ann.width ?? 0) / 2,
-        ann.y + (ann.height ?? 0) / 2,
-        Math.abs(ann.width ?? 0) / 2,
-        Math.abs(ann.height ?? 0) / 2,
-        0,
-        0,
-        Math.PI * 2
-      );
-      ctx.stroke();
-      break;
-    }
-    case "line": {
-      if (!ann.points || ann.points.length < 2) break;
-      ctx.strokeStyle = ann.color;
-      ctx.lineWidth = ann.strokeWidth ?? 2;
-      ctx.beginPath();
-      ctx.moveTo(ann.points[0].x, ann.points[0].y);
-      ctx.lineTo(ann.points[1].x, ann.points[1].y);
-      ctx.stroke();
-      break;
-    }
-    case "draw": {
-      if (!ann.points || ann.points.length < 2) break;
-      ctx.strokeStyle = ann.color;
-      ctx.lineWidth = ann.strokeWidth ?? 2;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.beginPath();
-      ctx.moveTo(ann.points[0].x, ann.points[0].y);
-      for (let i = 1; i < ann.points.length; i++) {
-        ctx.lineTo(ann.points[i].x, ann.points[i].y);
-      }
-      ctx.stroke();
-      break;
-    }
-  }
+  drawAnnotationOnCanvas(ctx, ann);
 
   if (selected) {
+    ctx.save();
     ctx.strokeStyle = "#2563eb";
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
@@ -113,9 +58,8 @@ function drawAnnotation(
       bh = Math.max(...ys) - Math.min(...ys) + pad * 2;
     }
     ctx.strokeRect(bx, by, bw, bh);
+    ctx.restore();
   }
-
-  ctx.restore();
 }
 
 export function PdfCanvas({ editor }: PdfCanvasProps) {
@@ -190,28 +134,20 @@ export function PdfCanvas({ editor }: PdfCanvasProps) {
     const pageTextBlocks = editor.textBlocks.filter(
       (b) => b.pageIndex === editor.currentPage
     );
-    for (const [regionId, newText] of Object.entries(editor.regionEdits)) {
-      const blockIds = parseRegionBlockIds(regionId);
-      const blocks = pageTextBlocks.filter((b) => blockIds.includes(b.id));
-      if (blocks.length === 0) continue;
-      const original = combineBlockTexts(blocks);
-      if (newText === original) continue;
-      const isEditing =
-        editor.editingRegion &&
-        editor.editingRegion.id === regionId;
-      if (isEditing) {
-        const bounds = boundsFromBlocks(blocks);
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(bounds.x - 2, bounds.y - 2, bounds.width + 4, bounds.height + 4);
-        continue;
-      }
-      const bounds = boundsFromBlocks(blocks);
-      const fontSize = Math.max(...blocks.map((b) => b.fontSize));
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(bounds.x - 2, bounds.y - 2, bounds.width + 4, bounds.height + 4);
-      ctx.fillStyle = "#000000";
-      ctx.font = `${fontSize}px Helvetica, Arial, sans-serif`;
-      ctx.fillText(newText, bounds.x, bounds.y + fontSize * 0.85);
+    drawRegionEditsOnCanvas(
+      ctx,
+      editor.currentPage,
+      pageTextBlocks,
+      editor.regionEdits,
+      editor.editingRegion?.id
+    );
+
+    // While editing a region: white out so the textarea sits over blank canvas.
+    if (editor.editingRegion) {
+      const editBlocks = pageTextBlocks.filter((b) =>
+        editor.editingRegion!.blockIds.includes(b.id)
+      );
+      whiteOutRegionBlocks(ctx, editBlocks);
     }
 
     for (const ann of pageAnnotations) {

@@ -1,15 +1,15 @@
 "use client";
 
-import { PDFDocument, rgb, StandardFonts, type PDFPage, type PDFFont } from "pdf-lib";
+import { PDFDocument } from "pdf-lib";
 import type { Annotation, PdfTextBlock } from "./types";
-import { boundsFromBlocks, combineBlockTexts, parseRegionBlockIds } from "./text-regions";
+import { drawAnnotationOnCanvas, drawRegionEditsOnCanvas } from "./canvas-render";
 import { loadPdfDocument } from "./pdf-loader";
 
 async function savePdf(doc: PDFDocument) {
   return doc.save({ useObjectStreams: false });
 }
 
-async function canvasToJpeg(canvas: HTMLCanvasElement): Promise<Uint8Array> {
+async function canvasToPng(canvas: HTMLCanvasElement): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
     canvas.toBlob(
       async (blob) => {
@@ -19,152 +19,14 @@ async function canvasToJpeg(canvas: HTMLCanvasElement): Promise<Uint8Array> {
         }
         resolve(new Uint8Array(await blob.arrayBuffer()));
       },
-      "image/jpeg",
-      0.92
+      "image/png"
     );
   });
 }
 
-function hexToRgb(hex: string) {
-  const normalized = hex.replace("#", "");
-  const r = parseInt(normalized.slice(0, 2), 16) / 255;
-  const g = parseInt(normalized.slice(2, 4), 16) / 255;
-  const b = parseInt(normalized.slice(4, 6), 16) / 255;
-  return rgb(r, g, b);
-}
-
-function canvasToPdfY(canvasY: number, pageHeight: number, scale: number) {
-  return pageHeight - canvasY / scale;
-}
-
-function applyEditsToPage(
-  page: PDFPage,
-  pageIndex: number,
-  pageHeight: number,
-  scale: number,
-  annotations: Annotation[],
-  textBlocks: PdfTextBlock[],
-  regionEdits: Record<string, string>,
-  font: PDFFont
-) {
-  const pageTextBlocks = textBlocks.filter((b) => b.pageIndex === pageIndex);
-  const consumed = new Set<string>();
-
-  for (const [regionId, newText] of Object.entries(regionEdits)) {
-    const blockIds = parseRegionBlockIds(regionId);
-    const blocks = pageTextBlocks.filter((b) => blockIds.includes(b.id));
-    if (blocks.length === 0) continue;
-
-    const original = combineBlockTexts(blocks);
-    if (newText === original) continue;
-
-    const bounds = boundsFromBlocks(blocks);
-    const fontSize = Math.max(...blocks.map((b) => b.fontSize));
-    const pad = 2 / scale;
-    page.drawRectangle({
-      x: bounds.x / scale - pad,
-      y: canvasToPdfY(bounds.y + bounds.height, pageHeight, scale) - pad,
-      width: bounds.width / scale + pad * 2,
-      height: bounds.height / scale + pad * 2,
-      color: rgb(1, 1, 1),
-    });
-
-    page.drawText(newText, {
-      x: bounds.x / scale,
-      y: canvasToPdfY(bounds.y + fontSize * 0.85, pageHeight, scale),
-      size: fontSize / scale,
-      font,
-      color: rgb(0, 0, 0),
-    });
-
-    blockIds.forEach((id) => consumed.add(id));
-  }
-
-  void consumed;
-
-  const pageAnnotations = annotations.filter((a) => a.pageIndex === pageIndex);
-  for (const ann of pageAnnotations) {
-    const color = hexToRgb(ann.color);
-
-    switch (ann.type) {
-      case "text": {
-        if (!ann.text) break;
-        const fontSize = (ann.fontSize ?? 16) / scale;
-        page.drawText(ann.text, {
-          x: ann.x / scale,
-          y: canvasToPdfY(ann.y, pageHeight, scale) - fontSize,
-          size: fontSize,
-          color,
-        });
-        break;
-      }
-      case "highlight": {
-        page.drawRectangle({
-          x: ann.x / scale,
-          y: canvasToPdfY(ann.y + (ann.height ?? 0), pageHeight, scale),
-          width: (ann.width ?? 0) / scale,
-          height: (ann.height ?? 0) / scale,
-          color: hexToRgb(ann.color),
-          opacity: 0.35,
-        });
-        break;
-      }
-      case "rectangle": {
-        page.drawRectangle({
-          x: ann.x / scale,
-          y: canvasToPdfY(ann.y + (ann.height ?? 0), pageHeight, scale),
-          width: (ann.width ?? 0) / scale,
-          height: (ann.height ?? 0) / scale,
-          borderColor: color,
-          borderWidth: (ann.strokeWidth ?? 2) / scale,
-        });
-        break;
-      }
-      case "circle": {
-        const w = (ann.width ?? 0) / scale;
-        const h = (ann.height ?? 0) / scale;
-        page.drawEllipse({
-          x: ann.x / scale + w / 2,
-          y: canvasToPdfY(ann.y, pageHeight, scale) - h / 2,
-          xScale: w / 2,
-          yScale: h / 2,
-          borderColor: color,
-          borderWidth: (ann.strokeWidth ?? 2) / scale,
-        });
-        break;
-      }
-      case "line": {
-        if (!ann.points || ann.points.length < 2) break;
-        const [start, end] = ann.points;
-        page.drawLine({
-          start: { x: start.x / scale, y: canvasToPdfY(start.y, pageHeight, scale) },
-          end: { x: end.x / scale, y: canvasToPdfY(end.y, pageHeight, scale) },
-          thickness: (ann.strokeWidth ?? 2) / scale,
-          color,
-        });
-        break;
-      }
-      case "draw": {
-        if (!ann.points || ann.points.length < 2) break;
-        for (let p = 1; p < ann.points.length; p++) {
-          const prev = ann.points[p - 1];
-          const curr = ann.points[p];
-          page.drawLine({
-            start: { x: prev.x / scale, y: canvasToPdfY(prev.y, pageHeight, scale) },
-            end: { x: curr.x / scale, y: canvasToPdfY(curr.y, pageHeight, scale) },
-            thickness: (ann.strokeWidth ?? 2) / scale,
-            color,
-          });
-        }
-        break;
-      }
-    }
-  }
-}
-
 /**
  * Export by rasterizing each page with pdf.js (works with encrypted PDFs),
- * then embedding the image into a new PDF and drawing edits on top.
+ * baking text edits and annotations into the canvas first so export matches preview.
  */
 export async function exportPdfWithAnnotations(
   pdfBytes: Uint8Array,
@@ -176,7 +38,6 @@ export async function exportPdfWithAnnotations(
 ): Promise<Uint8Array> {
   const src = await loadPdfDocument(pdfBytes);
   const pdfDoc = await PDFDocument.create();
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
   for (let i = 0; i < src.numPages; i++) {
     const page = await src.getPage(i + 1);
@@ -199,8 +60,15 @@ export async function exportPdfWithAnnotations(
       canvas,
     }).promise;
 
-    const jpegBytes = await canvasToJpeg(canvas);
-    const image = await pdfDoc.embedJpg(jpegBytes);
+    drawRegionEditsOnCanvas(ctx, i, textBlocks, regionEdits);
+
+    const pageAnnotations = annotations.filter((a) => a.pageIndex === i);
+    for (const ann of pageAnnotations) {
+      drawAnnotationOnCanvas(ctx, ann);
+    }
+
+    const pngBytes = await canvasToPng(canvas);
+    const image = await pdfDoc.embedPng(pngBytes);
 
     const pdfPage = pdfDoc.addPage([viewport1.width, viewport1.height]);
     pdfPage.drawImage(image, {
@@ -209,17 +77,6 @@ export async function exportPdfWithAnnotations(
       width: viewport1.width,
       height: viewport1.height,
     });
-
-    applyEditsToPage(
-      pdfPage,
-      i,
-      viewport1.height,
-      scale,
-      annotations,
-      textBlocks,
-      regionEdits,
-      font
-    );
   }
 
   return savePdf(pdfDoc);

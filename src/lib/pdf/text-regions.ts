@@ -49,6 +49,7 @@ export function combineBlockTexts(blocks: PdfTextBlock[]): string {
 }
 
 export function boundsFromBlocks(blocks: PdfTextBlock[]): Rect {
+  // Use raw pdf.js block widths — these are the actual measured widths used to cover original text.
   const x = Math.min(...blocks.map((b) => b.x));
   const y = Math.min(...blocks.map((b) => b.y));
   const right = Math.max(...blocks.map((b) => b.x + b.width));
@@ -191,7 +192,7 @@ export function mergeExtractedLines(blocks: PdfTextBlock[]): PdfTextBlock[] {
       const prev = group[group.length - 1];
       const curr = line[i];
       const gap = curr.x - (prev.x + prev.width);
-      if (gap <= curr.fontSize * 2.5) {
+      if (gap <= curr.fontSize * 1.2) {
         group.push(curr);
       } else {
         const r = regionFromBlocks(group);
