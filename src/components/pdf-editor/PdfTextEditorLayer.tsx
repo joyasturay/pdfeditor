@@ -4,10 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import type { PdfEditorState } from "@/hooks/usePdfEditor";
 import type { TextEditRegion } from "@/lib/pdf/text-regions";
 import {
-  getLineRegionAtPoint,
   getRegionInRect,
   hitTestBlock,
   normalizeDragRect,
+  parseRegionBlockIds,
+  regionFromBlocks,
 } from "@/lib/pdf/text-regions";
 
 interface PdfTextEditorLayerProps {
@@ -31,13 +32,15 @@ export function PdfTextEditorLayer({ editor, canvasSize }: PdfTextEditorLayerPro
   const layerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const skipBlurRef = useRef(false);
-  const [hoverRegion, setHoverRegion] = useState<TextEditRegion | null>(null);
+  const [hoverBlock, setHoverBlock] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [dragCurrent, setDragCurrent] = useState<{ x: number; y: number } | null>(null);
 
+  const pageBlocks = editor.textBlocks.filter(
+    (b) => b.pageIndex === editor.currentPage
+  );
   const editing = editor.editingRegion;
 
-  // Focus textarea when an edit opens.
   useEffect(() => {
     if (editing && inputRef.current) {
       skipBlurRef.current = true;
@@ -55,38 +58,41 @@ export function PdfTextEditorLayer({ editor, canvasSize }: PdfTextEditorLayerPro
     if (region) editor.startEditingRegion(region);
   };
 
-  const getPoint = (e: React.PointerEvent<HTMLElement>) =>
-    pointerToCanvas(e, layerRef.current ?? e.currentTarget, canvasSize);
+  const getPoint = (e: React.PointerEvent<HTMLElement>) => {
+    const el = layerRef.current ?? e.currentTarget;
+    return pointerToCanvas(e, el, canvasSize);
+  };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (editing) return;
     e.preventDefault();
-    const pt = getPoint(e);
+    const { x, y } = getPoint(e);
 
     if (editor.textEditSubMode === "marquee") {
       e.currentTarget.setPointerCapture(e.pointerId);
-      setDragStart(pt);
-      setDragCurrent(pt);
+      setDragStart({ x, y });
+      setDragCurrent({ x, y });
       return;
     }
 
-    const hit = hitTestBlock(editor.textBlocks, editor.currentPage, pt.x, pt.y);
+    // Click mode: select just the single block that was hit
+    const hit = hitTestBlock(editor.textBlocks, editor.currentPage, x, y);
     if (hit) {
-      openRegion(getLineRegionAtPoint(editor.textBlocks, editor.currentPage, pt.x, pt.y));
+      openRegion(regionFromBlocks([hit]));
     }
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const pt = getPoint(e);
+    const { x, y } = getPoint(e);
+
     if (dragStart) {
-      setDragCurrent(pt);
+      setDragCurrent({ x, y });
       return;
     }
+
     if (editor.textEditSubMode === "click" && !editing) {
-      const hit = hitTestBlock(editor.textBlocks, editor.currentPage, pt.x, pt.y);
-      setHoverRegion(
-        hit ? getLineRegionAtPoint(editor.textBlocks, editor.currentPage, pt.x, pt.y) : null
-      );
+      const hit = hitTestBlock(editor.textBlocks, editor.currentPage, x, y);
+      setHoverBlock(hit ? { x: hit.x, y: hit.y, width: hit.width, height: hit.height } : null);
     }
   };
 
@@ -96,13 +102,14 @@ export function PdfTextEditorLayer({ editor, canvasSize }: PdfTextEditorLayerPro
     setDragStart(null);
     setDragCurrent(null);
     if (rect.width < 6 && rect.height < 6) return;
-    openRegion(getRegionInRect(editor.textBlocks, editor.currentPage, rect));
+    const region = getRegionInRect(editor.textBlocks, editor.currentPage, rect);
+    if (region) openRegion(region);
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!dragStart) return;
-    const pt = getPoint(e);
-    finishMarquee(pt.x, pt.y);
+    const { x, y } = getPoint(e);
+    finishMarquee(x, y);
   };
 
   const commitEdit = (value: string) => {
@@ -117,15 +124,6 @@ export function PdfTextEditorLayer({ editor, canvasSize }: PdfTextEditorLayerPro
 
   const displayText = editing ? editor.getRegionText(editing) : "";
 
-  // Textarea sizing: fit the text or at least the region width.
-  const textareaWidth = editing
-    ? Math.min(
-        canvasSize.width - editing.x - 2,
-        Math.max(editing.width, displayText.length * editing.fontSize * 0.6 + 16)
-      )
-    : 0;
-  const textareaHeight = editing ? Math.max(editing.height + 2, editing.fontSize * 1.4) : 0;
-
   return (
     <div
       ref={layerRef}
@@ -138,20 +136,49 @@ export function PdfTextEditorLayer({ editor, canvasSize }: PdfTextEditorLayerPro
         </div>
       )}
 
-      {/* Hover highlight — click mode only */}
-      {hoverRegion && !editing && editor.textEditSubMode === "click" && (
+      {/* Hover highlight for click mode */}
+      {hoverBlock && !editing && editor.textEditSubMode === "click" && (
         <div
-          className="pointer-events-none absolute border border-dashed border-blue-500 bg-blue-500/10"
+          className="pointer-events-none absolute border border-dashed border-blue-400 bg-blue-400/10"
           style={{
-            left: hoverRegion.x,
-            top: hoverRegion.y,
-            width: hoverRegion.width,
-            height: hoverRegion.height,
+            left: hoverBlock.x - 2,
+            top: hoverBlock.y - 2,
+            width: hoverBlock.width + 4,
+            height: hoverBlock.height + 4,
           }}
         />
       )}
 
-      {/* Marquee drag preview */}
+      {/* Committed edits — white cover + new text, rendered as React divs (pixel-perfect match with editor view) */}
+      {Object.entries(editor.regionEdits).map(([regionId, text]) => {
+        const blockIds = parseRegionBlockIds(regionId);
+        const blocks = pageBlocks.filter((b) => blockIds.includes(b.id));
+        if (blocks.length === 0) return null;
+        const region = regionFromBlocks(blocks);
+        if (!region) return null;
+        return (
+          <div
+            key={regionId}
+            className="pointer-events-none absolute overflow-hidden whitespace-nowrap"
+            style={{
+              left: region.x - 1,
+              top: region.y - 1,
+              width: region.width + 2,
+              height: region.height + 2,
+              backgroundColor: "white",
+              fontSize: region.fontSize,
+              lineHeight: `${region.height}px`,
+              fontFamily: "Helvetica, Arial, sans-serif",
+              color: "#000",
+              paddingLeft: 0,
+            }}
+          >
+            {text}
+          </div>
+        );
+      })}
+
+      {/* Marquee drag rectangle */}
       {previewRect && (
         <div
           className="pointer-events-none absolute border-2 border-blue-500 bg-blue-500/15"
@@ -164,45 +191,56 @@ export function PdfTextEditorLayer({ editor, canvasSize }: PdfTextEditorLayerPro
         />
       )}
 
-      {/* Active text editor — floats over the canvas-drawn white box */}
+      {/* Active text editor — white cover + textarea */}
       {editing && (
-        <textarea
-          key={editing.id}
-          ref={inputRef}
-          defaultValue={displayText}
-          rows={1}
-          className="absolute z-30 resize-none rounded-none border border-blue-500 bg-white p-0 px-0.5 text-black outline-none"
-          style={{
-            left: editing.x,
-            top: editing.y,
-            width: textareaWidth,
-            height: textareaHeight,
-            minHeight: editing.fontSize * 1.3,
-            fontSize: editing.fontSize,
-            lineHeight: `${editing.fontSize * 1.15}px`,
-            fontFamily: "Helvetica, Arial, sans-serif",
-            caretColor: "#2563eb",
-          }}
-          onMouseDown={(e) => e.stopPropagation()}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === "Escape") {
-              e.preventDefault();
-              editor.startEditingRegion(null);
-            }
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              commitEdit((e.target as HTMLTextAreaElement).value);
-            }
-          }}
-          onBlur={(e) => {
-            if (skipBlurRef.current) return;
-            commitEdit(e.target.value);
-          }}
-        />
+        <>
+          {/* White cover to hide original text while editing */}
+          <div
+            className="pointer-events-none absolute"
+            style={{
+              left: editing.x - 2,
+              top: editing.y - 2,
+              width: editing.width + 4,
+              height: editing.height + 4,
+              backgroundColor: "white",
+            }}
+          />
+          <textarea
+            key={editing.id}
+            ref={inputRef}
+            defaultValue={displayText}
+            className="absolute z-30 resize-none border-0 bg-white p-0 text-black caret-blue-600 outline outline-2 outline-blue-500"
+            style={{
+              left: editing.x,
+              top: editing.y,
+              width: Math.max(editing.width, 60),
+              minHeight: editing.height,
+              fontSize: editing.fontSize,
+              lineHeight: `${editing.height}px`,
+              fontFamily: "Helvetica, Arial, sans-serif",
+              overflow: "hidden",
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Escape") {
+                e.preventDefault();
+                editor.startEditingRegion(null);
+              }
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                commitEdit((e.target as HTMLTextAreaElement).value);
+              }
+            }}
+            onBlur={(e) => {
+              if (skipBlurRef.current) return;
+              commitEdit(e.target.value);
+            }}
+          />
+        </>
       )}
 
-      {/* Interaction surface — shown only when not editing */}
+      {/* Invisible interaction layer — only shown when not actively editing */}
       {!editing && (
         <div
           className={`absolute inset-0 touch-none ${
@@ -212,23 +250,24 @@ export function PdfTextEditorLayer({ editor, canvasSize }: PdfTextEditorLayerPro
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerLeave={() => {
-            setHoverRegion(null);
-            if (dragStart && dragCurrent) finishMarquee(dragCurrent.x, dragCurrent.y);
+            setHoverBlock(null);
+            if (dragStart && dragCurrent) {
+              finishMarquee(dragCurrent.x, dragCurrent.y);
+            }
           }}
         />
       )}
 
-      {/* Status hints */}
-      {!editor.textBlocksLoading && editor.textBlocks.filter((b) => b.pageIndex === editor.currentPage).length === 0 && (
+      {!editor.textBlocksLoading && pageBlocks.length === 0 && (
         <div className="pointer-events-none absolute bottom-2 left-1/2 max-w-sm -translate-x-1/2 rounded-lg bg-amber-100 px-3 py-1.5 text-center text-xs text-amber-900">
-          No editable text found on this page. Make sure you uploaded the original PDF.
+          No editable text found. Use the original PDF — exported/scanned PDFs have no text layer.
         </div>
       )}
 
-      {!editor.textBlocksLoading && editor.textBlocks.filter((b) => b.pageIndex === editor.currentPage).length > 0 && !editing && (
+      {!editor.textBlocksLoading && pageBlocks.length > 0 && !editing && (
         <div className="pointer-events-none absolute bottom-2 left-1/2 max-w-md -translate-x-1/2 rounded-lg bg-blue-600/90 px-3 py-1.5 text-center text-xs text-white">
           {editor.textEditSubMode === "marquee"
-            ? "Drag to select text · release to edit · Esc to cancel"
+            ? "Drag to select text · release to edit"
             : "Click any text to edit · Enter to save · Esc to cancel"}
         </div>
       )}

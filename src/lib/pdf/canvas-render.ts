@@ -1,5 +1,10 @@
 import type { Annotation, PdfTextBlock } from "./types";
-import { combineBlockTexts, parseRegionBlockIds } from "./text-regions";
+import { blockTextBaseline } from "./types";
+import {
+  boundsFromBlocks,
+  combineBlockTexts,
+  parseRegionBlockIds,
+} from "./text-regions";
 
 export function drawAnnotationOnCanvas(
   ctx: CanvasRenderingContext2D,
@@ -71,21 +76,21 @@ export function drawAnnotationOnCanvas(
 }
 
 /**
- * Cover all committed text edits on the canvas.
- *
- * @param editingRegionId  If set, white-out that region but skip drawing new text
- *                         (the live textarea handles display while editing).
+ * Bake committed text edits onto a canvas.
+ * Used exclusively for export — editor preview uses React div layer instead.
  */
 export function drawRegionEditsOnCanvas(
   ctx: CanvasRenderingContext2D,
   pageIndex: number,
   textBlocks: PdfTextBlock[],
   regionEdits: Record<string, string>,
-  editingRegionId?: string | null
+  skipRegionId?: string | null
 ) {
   const pageTextBlocks = textBlocks.filter((b) => b.pageIndex === pageIndex);
 
   for (const [regionId, newText] of Object.entries(regionEdits)) {
+    if (skipRegionId && regionId === skipRegionId) continue;
+
     const blockIds = parseRegionBlockIds(regionId);
     const blocks = pageTextBlocks.filter((b) => blockIds.includes(b.id));
     if (blocks.length === 0) continue;
@@ -93,39 +98,20 @@ export function drawRegionEditsOnCanvas(
     const original = combineBlockTexts(blocks);
     if (newText === original) continue;
 
-    // Raw block bounds for the white cover — trust pdf.js measurements.
-    const bx = Math.min(...blocks.map((b) => b.x));
-    const by = Math.min(...blocks.map((b) => b.y));
-    const right = Math.max(...blocks.map((b) => b.x + b.width));
-    const bottom = Math.max(...blocks.map((b) => b.y + b.height));
+    const bounds = boundsFromBlocks(blocks);
     const fontSize = Math.max(...blocks.map((b) => b.fontSize));
 
-    // White out original text with 1px padding on each side.
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(bx - 1, by - 1, right - bx + 2, bottom - by + 2);
-
-    // While editing this region: leave blank — the textarea shows the live value.
-    if (regionId === editingRegionId) continue;
-
-    // Draw replacement text at the same baseline as original.
-    ctx.save();
+    // Measure actual rendered text width so cover is exactly right
     ctx.font = `${fontSize}px Helvetica, Arial, sans-serif`;
-    ctx.fillStyle = "#000000";
-    ctx.fillText(newText, bx, by + fontSize * 0.85);
-    ctx.restore();
-  }
-}
+    const measured = ctx.measureText(newText).width;
+    const coverWidth = Math.max(bounds.width, measured) + 2;
 
-/** White out a region without drawing replacement (used while user is actively editing). */
-export function whiteOutRegionBlocks(
-  ctx: CanvasRenderingContext2D,
-  blocks: PdfTextBlock[]
-) {
-  if (blocks.length === 0) return;
-  const bx = Math.min(...blocks.map((b) => b.x));
-  const by = Math.min(...blocks.map((b) => b.y));
-  const right = Math.max(...blocks.map((b) => b.x + b.width));
-  const bottom = Math.max(...blocks.map((b) => b.y + b.height));
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(bx - 2, by - 2, right - bx + 4, bottom - by + 4);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(bounds.x - 1, bounds.y - 1, coverWidth + 2, bounds.height + 2);
+
+    ctx.fillStyle = "#000000";
+    // Use the first block as the baseline reference
+    const baselineY = blockTextBaseline({ ...blocks[0], y: bounds.y, fontSize });
+    ctx.fillText(newText, bounds.x, baselineY);
+  }
 }

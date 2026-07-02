@@ -4,11 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { PdfEditorState } from "@/hooks/usePdfEditor";
 import type { Annotation, Point } from "@/lib/pdf/types";
 import { loadPdfDocument, renderPageToCanvas } from "@/lib/pdf/pdf-loader";
-import {
-  drawAnnotationOnCanvas,
-  drawRegionEditsOnCanvas,
-  whiteOutRegionBlocks,
-} from "@/lib/pdf/canvas-render";
+import { drawAnnotationOnCanvas } from "@/lib/pdf/canvas-render";
 import { PdfTextEditorLayer } from "./PdfTextEditorLayer";
 
 interface PdfCanvasProps {
@@ -82,9 +78,7 @@ export function PdfCanvas({ editor }: PdfCanvasProps) {
     (a) => a.pageIndex === editor.currentPage
   );
 
-  const regionEditsKey = JSON.stringify(editor.regionEdits);
-
-  // Render PDF base layer ONLY when document/page/scale changes — never on annotation edits
+  // Render PDF base layer — only when document/page/scale changes
   useEffect(() => {
     if (!editor.document) return;
 
@@ -121,7 +115,8 @@ export function PdfCanvas({ editor }: PdfCanvasProps) {
     };
   }, [editor.document, editor.currentPage, editor.pageRotations, scale]);
 
-  // Redraw annotation overlay only — fixed-size dependency array
+  // Annotation overlay — only draws shapes/highlights/text annotations, NOT text edits
+  // Text edits are rendered by PdfTextEditorLayer (React divs) so they exactly match the editor
   useEffect(() => {
     if (!pdfReady) return;
     const canvas = overlayRef.current;
@@ -130,25 +125,6 @@ export function PdfCanvas({ editor }: PdfCanvasProps) {
     if (!ctx) return;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    const pageTextBlocks = editor.textBlocks.filter(
-      (b) => b.pageIndex === editor.currentPage
-    );
-    drawRegionEditsOnCanvas(
-      ctx,
-      editor.currentPage,
-      pageTextBlocks,
-      editor.regionEdits,
-      editor.editingRegion?.id
-    );
-
-    // While editing a region: white out so the textarea sits over blank canvas.
-    if (editor.editingRegion) {
-      const editBlocks = pageTextBlocks.filter((b) =>
-        editor.editingRegion!.blockIds.includes(b.id)
-      );
-      whiteOutRegionBlocks(ctx, editBlocks);
-    }
 
     for (const ann of pageAnnotations) {
       drawAnnotation(ctx, ann, ann.id === editor.selectedId);
@@ -160,8 +136,6 @@ export function PdfCanvas({ editor }: PdfCanvasProps) {
     pdfReady,
     editor.currentPage,
     editor.selectedId,
-    editor.editingRegion,
-    regionEditsKey,
     pageAnnotations,
     previewAnn,
   ]);

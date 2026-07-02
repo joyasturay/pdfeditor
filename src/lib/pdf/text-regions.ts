@@ -34,7 +34,7 @@ export function parseRegionBlockIds(regionId: string): string[] {
 }
 
 export function combineBlockTexts(blocks: PdfTextBlock[]): string {
-  const sorted = [...blocks].sort((a, b) => a.x - b.x || a.y - b.y);
+  const sorted = [...blocks].sort((a, b) => a.y - b.y || a.x - b.x);
   let result = "";
   for (let i = 0; i < sorted.length; i++) {
     const b = sorted[i];
@@ -49,7 +49,6 @@ export function combineBlockTexts(blocks: PdfTextBlock[]): string {
 }
 
 export function boundsFromBlocks(blocks: PdfTextBlock[]): Rect {
-  // Use raw pdf.js block widths — these are the actual measured widths used to cover original text.
   const x = Math.min(...blocks.map((b) => b.x));
   const y = Math.min(...blocks.map((b) => b.y));
   const right = Math.max(...blocks.map((b) => b.x + b.width));
@@ -58,7 +57,7 @@ export function boundsFromBlocks(blocks: PdfTextBlock[]): Rect {
   return {
     x,
     y,
-    width: Math.max(right - x, fontSize),
+    width: Math.max(right - x, fontSize * 0.5),
     height: Math.max(bottom - y, fontSize * 1.1),
   };
 }
@@ -101,7 +100,7 @@ export function hitTestBlock(
   const pageBlocks = blocks.filter((b) => b.pageIndex === pageIndex);
   for (let i = pageBlocks.length - 1; i >= 0; i--) {
     const b = pageBlocks[i];
-    const pad = 6;
+    const pad = 4;
     if (
       x >= b.x - pad &&
       x <= b.x + b.width + pad &&
@@ -171,7 +170,10 @@ export function normalizeDragRect(x1: number, y1: number, x2: number, y2: number
   };
 }
 
-/** Merge raw pdf.js items on the same line into fewer blocks for smoother click targets. */
+/**
+ * Merge adjacent items that are clearly part of the same word/token.
+ * Uses a tight gap threshold (0.6× fontSize) to keep separate form fields distinct.
+ */
 export function mergeExtractedLines(blocks: PdfTextBlock[]): PdfTextBlock[] {
   if (blocks.length === 0) return [];
   const sorted = [...blocks].sort((a, b) => a.y - b.y || a.x - b.x);
@@ -192,7 +194,9 @@ export function mergeExtractedLines(blocks: PdfTextBlock[]): PdfTextBlock[] {
       const prev = group[group.length - 1];
       const curr = line[i];
       const gap = curr.x - (prev.x + prev.width);
-      if (gap <= curr.fontSize * 1.2) {
+      // Only merge items that are very close — same word / broken char run
+      // Gap > 0.6× fontSize = different form field, keep separate
+      if (gap <= curr.fontSize * 0.6) {
         group.push(curr);
       } else {
         const r = regionFromBlocks(group);
